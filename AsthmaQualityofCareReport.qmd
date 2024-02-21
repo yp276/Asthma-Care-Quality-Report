@@ -1,0 +1,279 @@
+---
+title: "SyntheticMGUH Asthma Care Quality Report"
+format: html
+embed-resources: true
+---
+
+# Name: Yuktha Penumala 
+
+```{r setup, include=FALSE}
+#| warning: false
+library(tidyverse)     # loads the tidyverse tools
+library(RPostgres)     # loads the database driver for PostgreSQL
+library(connections)   # helps RPostgres work with RStudio
+library(keyring)       # access to a local encrypted keychain for passwords
+
+con <- connection_open(RPostgres::Postgres(),
+          dbname = "syntheticMGUH",
+          host = "...", 
+          user = "...", 
+          password = key_get(service = "...", 
+                             username = "..."),
+          bigint = "numeric")
+```
+
+# Introduction:  
+In efforts to improve clinical care, the National Asthma Education and Prevention Program is designing an Asthma registry. The purpose of this registry is to consolidate all of the vast Asthma data into a singular and accessible database, which supports exchange of patient information and advancements in research for further analysis. 
+
+
+# Definition of Asthma patient population: 
+The target population is Asthma patients, however, there are multiple identifiers for Asthma, including Conditions, Encounters, Careplans, Immunizations, and Medications. 
+
+First, it's imperative to look at the Conditions table, and count all unique patients who are currently listed with an Asthma diagnosis, including childhood asthma. It's reported that there are a total of 352 patients with active Asthma diagnoses (conditions).
+```{sql connection = con}
+/*Patient selection via Conditions*/
+  SELECT DISTINCT patient, description /*Include description column to cross-check for accuracy*/ 
+  FROM conditions 
+  WHERE (description like '%asthma%' OR description like '%Asthma%')
+    AND stop IS NULL /*To only include 'active' state*/
+```
+
+Next, it's imperative to look at Encounters table, which reports on-going visits for Asthma treatment,  and count all unique patients with reported encounters for Asthma. It's reported that there are a total of 684 Asthma patients with ongoing encounters. 
+```{sql connection = con}
+/*Patient selection via Encounters*/
+SELECT DISTINCT patient, reasondescription /*Include reasondescription column to cross-check for accuracy*/ 
+FROM encounters 
+WHERE reasondescription like '%asthma%' OR reasondescription like '%Asthma%'
+  AND stop IS NULL /*To only include 'active' state*/
+```
+
+Next, we take a look at the Careplans table, which contains information related to care/treatments plans, and count all unique patients with reported care plans for Asthma. Please note, the careplan is listed as 'Asthma self management'. It's reported that there are a total of 1,000 (or more) patients with current careplans for Asthma. 
+```{sql connection = con}
+/*Patient selection via Careplans*/
+SELECT DISTINCT patient, description /*Include description column to cross-check for accuracy*/ 
+FROM careplans 
+WHERE (description like '%Asthma%')
+  AND stop IS NULL /*To only include 'active' state*/
+```
+Additionally, we extract information from the Immunizations table, which stores vaccination history and records, and count all unique patients who received the pneumococcal vaccination (“Pneumococcal conjugate PCV 13”) in the last year since Asthmatics are at higher risk for pneumonia.  It's reported that a total of 1,000 (or more) Asthmatics who received this vaccine last year. 
+```{sql connection = con}
+/*Patient selection via Immunizations*/
+SELECT DISTINCT patient, date, description /*Include addtl columns to cross-check for accuracy*/
+FROM immunizations 
+WHERE (description like '%Pneumococcal conjugate PCV 13%')
+  AND date >= '2022-01-01' AND date <= '2022-12-31' /*To only filter 2022 year*/ 
+```
+
+Finally, we obtain information from the Medications table. Since asthma is a complex and variable condition affect individuals differently, there's a wide-range of inhalers (maintenance and rescue). We count all unique patients who are currently on Asthma medications. Currently, there's a total of 1,000 patients (or more) with active inhalers prescriptions.  
+```{sql connection=con}
+/*Create a CTE for asthma meds*/ 
+WITH asthma_meds AS (
+  SELECT distinct patient, description /*Also, refer to description to view the names of Maintenance inhalers*/ 
+  FROM medications
+  WHERE
+      -- Maintenance inhalers
+      code in (95996, 349094, 616830, 1998774, 896209, 896006, 966529, 746815, 966524, 1547660, 1998772, 1536144)
+  UNION
+  SELECT distinct patient, description /*Also, refer to description to view the names of Rescue inhalers*/ 
+  FROM medications
+  WHERE
+      -- Rescue inhalers
+      code in (630208, 859088, 745752, 351137, 351136, 245314, 2123111, 746763)
+)
+SELECT * FROM asthma_meds
+```
+
+All together, you can now merge all identifiers into a singular table. To do so, you create a CTE 'ASTHMA_cohort', which joins together the Conditions, Encounters, Careplans, and Immunizations tables using a UNION SELECT. Then, you create a second CTE 'ASTHMA_total_cohort, which joins together the 'ASTHMA_cohort' CTE and 'asthma_meds' CTE using UNION SELECT to define the entire Asthma cohort patient population. You then count the total # of patients within the 'ASTHMA_total_cohort'. It's reported that there are 3,114 current listed patients with Asthma in the database. 
+```{sql connection=con}
+WITH ASTHMA_cohort AS (
+  SELECT DISTINCT patient
+    FROM conditions WHERE (description like '%asthma%' OR description like '%Asthma%')
+      AND stop IS NULL
+  UNION 
+  SELECT DISTINCT patient
+    FROM encounters WHERE (reasondescription like '%asthma%' OR reasondescription like '%Asthma%')
+      AND stop IS NULL
+  UNION
+  SELECT DISTINCT patient
+    FROM careplans WHERE (description like '%Asthma%')
+      AND stop IS NULL
+  UNION
+  SELECT DISTINCT patient
+    FROM immunizations WHERE (description like '%Pneumococcal conjugate PCV 13%')
+      AND date >= '2022-01-01' AND date <= '2022-12-31'
+),
+asthma_meds AS (
+  SELECT distinct patient
+  FROM medications
+  WHERE
+      -- Maintenance inhalers
+      code in (95996, 349094, 616830, 1998774, 896209, 896006, 966529, 746815, 966524, 1547660, 1998772, 1536144)
+  -- GROUP BY type, code, description
+  UNION
+  SELECT distinct patient
+  FROM medications
+  WHERE
+      -- Rescue inhalers
+      code in (630208, 859088, 745752, 351137, 351136, 245314, 2123111, 746763)
+  -- GROUP BY type, code, description
+),
+ASTHMA_total_cohort AS(
+  SELECT * 
+    FROM asthma_meds
+  UNION 
+  SELECT *
+    FROM ASTHMA_cohort
+)
+SELECT COUNT(*) as rows, COUNT(DISTINCT patient) as patients -- count total # of patients in CTE including # of rows to verify it matches 
+FROM ASTHMA_total_cohort
+```
+
+Since we have now defined the Asthma patient cohort, we create a temporary table, which makes it easier for further analysis.
+
+```{sql connection=con}
+-- First, if our table already exists we will drop it.
+DROP TABLE IF EXISTS AsthmaCohortFinal
+```
+
+```{sql connection=con}
+WITH ASTHMA_cohort AS (
+  SELECT DISTINCT patient
+    FROM conditions WHERE (description like '%asthma%' OR description like '%Asthma%')
+      AND stop IS NULL
+  UNION 
+  SELECT DISTINCT patient
+    FROM encounters WHERE (reasondescription like '%asthma%' OR reasondescription like '%Asthma%')
+      AND stop IS NULL
+  UNION
+  SELECT DISTINCT patient
+    FROM careplans WHERE (description like '%Asthma%')
+      AND stop IS NULL
+  UNION
+  SELECT DISTINCT patient
+    FROM immunizations WHERE (description like '%Pneumococcal conjugate PCV 13%')
+      AND date >= '2022-01-01' AND date <= '2022-12-31'
+),
+asthma_meds AS (
+  SELECT distinct patient
+  FROM medications
+  WHERE
+      -- Maintenance inhalers
+      code in (95996, 349094, 616830, 1998774, 896209, 896006, 966529, 746815, 966524, 1547660, 1998772, 1536144)
+  -- GROUP BY type, code, description
+  UNION
+  SELECT distinct patient
+  FROM medications
+  WHERE
+      -- Rescue inhalers
+      code in (630208, 859088, 745752, 351137, 351136, 245314, 2123111, 746763)
+  -- GROUP BY type, code, description
+),
+ASTHMA_total_cohort AS(
+  SELECT * 
+    FROM asthma_meds
+  UNION 
+  SELECT *
+    FROM ASTHMA_cohort
+)
+SELECT * INTO TEMP AsthmaCohortFinal FROM ASTHMA_total_cohort
+```
+
+# Demographics of the Asthma patient population: 
+Now, it's crucial to understand the demographical information of the Asthma patient population, including the average age, gender breakdown, race breakdown, and smoking status. To begin with, you identify that age, gender, and race information is in the Patients table, where smoking status information is in the Observations table. Thus, you begin with creating a 'smoking_status' CTE and select all unique patients who are reported smokers. After, in the main query, you calculate the average age and percentages for gender, race, and smoking status for the Asthma patient population from the 'AsthmaCohortFinal' temporary tabble. 
+
+More specifically, Extract() function extracts the year component from the age difference, giving the number of years between the birthdate and current date. Then, the AVG() function is used to obtain the average of the ages for all Asthma patients in the table. 
+
+The CASE WHEN() is used to create a conditional count, in which it checks each row in the Patients table and evaluates each of the conditions (gender = M or F, race = white, black, asian, hawaiian, other, smoking status = NOT NULL). If the condition is met, it assigns a value of 1, otherwise, it assigns 0. The SUM() function then adds up all the 1s and 0s for each condition, counting the total number of males, females, whites, blacks, asians, hawaiians, others, and smokers. Then, the percentages for each are calcualted by multiplying by 100 and dividing by total count of patients in table (~3114 pts). 
+
+Then, you do an INNER JOIN() of the Patients table and 'AsthmaCohortFinal' CTE on the patient ID column to obtain matching values. After, you perform a LEFT JOIN() of 'smoking_status' CTE and 'AsthmaCohortFinal' CTE on the patient ID column to retrieve all rows from 'AsthmaCohortFinal' and matching rows from 'smoking_status'.
+
+It's reported that the average age of this Asthma cohort is 38, in which 53% are females and 46% males. The race breakdown is: 49% Black, 42% White, 5% Asian, 1% Hawaiian, and 1% Other. Also, 91% are smokers. 
+
+```{sql connection = con}
+-- CTE to store patients who smoke 
+WITH smoking_status AS (
+    SELECT DISTINCT patient
+    FROM observations 
+    WHERE code = '72166-2' /*Code which defines Tobacco smoking status*/ 
+)
+-- Calculate age, gender, race, and smoking status statistics for the Asthma cohort
+SELECT
+    AVG(EXTRACT(YEAR FROM AGE(CURRENT_DATE, birthdate)) ) AS AverageAge,
+    100 * SUM(CASE WHEN Patients.gender = 'F' THEN 1 ELSE 0 END) / COUNT(*) AS FemalePercentage,
+    100 * SUM(CASE WHEN Patients.gender = 'M' THEN 1 ELSE 0 END) / COUNT(*) AS MalePercentage,
+    100 * SUM(CASE WHEN Patients.race = 'white' THEN 1 ELSE 0 END) / COUNT(*) AS WhitePercentage,
+    100 * SUM(CASE WHEN Patients.race = 'black' THEN 1 ELSE 0 END) / COUNT(*) AS BlackPercentage,
+    100 * SUM(CASE WHEN Patients.race = 'asian' THEN 1 ELSE 0 END) / COUNT(*) AS AsianPercentage,
+    100 * SUM(CASE WHEN Patients.race = 'hawaiian' THEN 1 ELSE 0 END) / COUNT(*) AS HawaiianPercentage,
+    100 * SUM(CASE WHEN Patients.race NOT IN ('white', 'black', 'asian', 'hawaiian') THEN 1 ELSE 0 END) / COUNT(*) AS OtherPercentage,
+    100 * COUNT(CASE WHEN smoking_status.patient IS NOT NULL THEN 1 ELSE NULL END) / COUNT(*) AS SmokingPercentage
+FROM AsthmaCohortFinal
+INNER JOIN Patients ON AsthmaCohortFinal.patient = Patients.id
+LEFT JOIN smoking_status ON AsthmaCohortFinal.patient = smoking_status.patient
+```
+
+# Proportion that have an Asthma care plan: 
+Next, we can calculate the proportion of the Asthma patient population with a current care/treatment plan. 
+
+Specifically, CASE WHEN() counts the number of Asthma patients with a care plan, and assigns a value of 1. For those patients without a care plan, a value of 0 is assigned. The Sum() function is then used to add up all the asthma patients with care plans, and multiplied by 100 to express as a percentage. Then, you divide by the total number of Asthma patients in the cohort using COUNT(*).  
+
+After, you perform a LEFT JOIN() of the Careplans table on the 'AsthmaCohortFinal' CTE to include all patients from AsthmaCohortFinal who have corresponding care plans in the Careplans table. 
+
+It's reported that all patients (100%) in the Asthma cohort are being actively monitored and managed through a care plan. 
+
+```{sql connection=con}
+-- Calculate the proportion of Asthma patients with an asthma care plan
+SELECT
+  100 * SUM(CASE WHEN careplans.patient IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*) AS ProportionWithAsthmaCarePlan
+FROM AsthmaCohortFinal
+LEFT JOIN careplans ON AsthmaCohortFinal.patient = careplans.patient
+-- Apply a filter to include only asthma care plans that are active
+WHERE careplans.description LIKE '%Asthma%' AND careplans.stop IS NULL
+```
+
+# Proportion that have a maintenance and rescue inhaler: 
+Next, we can calculate the proportion of the Asthma patient population who are currently prescribed a maintenance and/or rescue inhaler. 
+
+Specifically, CASE WHEN() counts the number of Asthma patients with either a maintenance or rescue inhaler, specified by multiple codes, and assigns a value of 1 for these patients. For those patients without one of these codes, a value of 0 is assigned. The Sum() function is then used to add up all the asthma patients with an inhaler, and multiplied by 100 to express as a percentage. Then, you divide by the total number of Asthma patients in the cohort using COUNT(*), respectively for those with maintenance inhaler and those with rescue inhaler.  
+
+After, you perform a LEFT JOIN() of the Medications table on the 'AsthmaCohortFinal' CTE to include all patients from AsthmaCohortFinal who have corresponding maintenance or rescue inhalers in the Medications table. 
+
+It's reported that 7% and 19% of Asthma patients are currently prescribed a maintenance and rescue inhaler, respectively, as part of their treatment regimen. 
+```{sql connection = con}
+-- Calculate the proportion of Asthma patients with maintenance and rescue inhalers
+SELECT
+  -- Maintenance inhaler 
+  100 * SUM(CASE WHEN medications.code IN (95996, 349094, 616830, 1998774, 896209, 896006, 966529, 746815, 966524, 1547660, 1998772, 1536144) THEN 1 ELSE 0 END) / COUNT(*) AS ProportionWithMaintenanceInhaler,
+  --- Rescue inhaler 
+  100 * SUM(CASE WHEN medications.code IN (630208, 859088, 745752, 351137, 351136, 245314, 2123111, 746763) THEN 1 ELSE 0 END) / COUNT(*) AS ProportionWithRescueInhaler
+FROM AsthmaCohortFinal
+LEFT JOIN medications ON AsthmaCohortFinal.patient = medications.patient
+```
+
+# Proportion that have received the vaccination in 2022: 
+Next, we can calculate the proportion of the Asthma patient population who received the Pneumococcal conjugate PCV 13% vaccine in 2022. 
+
+Specifically, CASE WHEN() counts the number of Asthma patients who received the vaccine in 2022, assigning a value of 1 for these patients. For those patients who didn't receive a vaccine, a value of 0 is assigned. The Sum() function is then used to add up all the asthma patients who got the vaccine, and multiplied by 100 to express as a percentage. Then, you divide by the total number of Asthma patients in the cohort using COUNT(*).
+
+After, you perform a LEFT JOIN() of the Immunizations table on the 'AsthmaCohortFinal' CTE to include all patients from AsthmaCohortFinal who have corresponding pneumococcal vaccination in the Medications table. 
+
+It's reported that all patients (100%) in the Asthma cohort received the Pneumococcal conjugate PCV 13% vaccine in 2022. 
+```{sql connection=con}
+-- Calculate the proportion of Asthma patients who received the vaccination in 2022
+SELECT
+  100 * SUM(CASE WHEN immunizations.date >= '2022-01-01' AND immunizations.date <= '2022-12-31' THEN 1 ELSE 0 END) / COUNT(*) AS ProportionReceivedVaccinationIn2022
+FROM AsthmaCohortFinal
+LEFT JOIN immunizations ON AsthmaCohortFinal.patient = immunizations.patient
+WHERE immunizations.description LIKE '%Pneumococcal conjugate PCV 13%' AND immunizations.date >= '2022-01-01' AND immunizations.date <= '2022-12-31'
+```
+
+# A way to indicate how "active" (sick) an asthma patient has been over the past 12 months
+Finally, to illustrate how "active" or sick an Asthma patient has been over the past 12 months, we can take a look at the Procedures table, in which patients are reported having Chronic Obstructive Pulmonary Disease (COPD) in 2022. Please note, long-term severe asthma can greatly increase risk of developing COPD. Thus, we can filter COPD using pulmonary emphysema and chronic obstructive bronchitis, both of which are part of COPD. We perform an INNER JOIN() to identify overlapping Asthma patients from the 'AsthmaCohortFinal' CTE who also received a procedure for Pulmonary emphysema or Chronic obstructive bronchitis. 
+It's reported that there are 409 actively sick Asthma patients in the past 12 months. 
+```{sql connection=con}
+SELECT DISTINCT procedures.patient, reasondescription
+FROM AsthmaCohortFinal
+INNER JOIN procedures on AsthmaCohortFinal.patient = procedures.patient
+WHERE reasondescription like '%Pulmonary%'  or reasondescription like '%Chronic obstructive%'
+  AND start >= '2022-01-01' AND stop <= '2022-12-31'
+```
