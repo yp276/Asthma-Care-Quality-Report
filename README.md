@@ -1,7 +1,7 @@
 # Asthma-Care-Quality-Report
 A Formal Report on the Quality of Care of Asthma Patients based on the Synthea dataset in SQL
 
-This repository contains files/code for Georgetown HIDS 6002 (Utilizing Data in EMRs) Assignment. This assignment connects to the Synthea dataset (https://synthea.mitre.org/) using PostgreSQL driver and the syntheticmguh database.
+This repository contains files/code for Georgetown HIDS 6002 (Utilizing Data in EMRs) Assignment. This assignment connects to the Synthea dataset (https://synthea.mitre.org/) using PostgreSQL driver and the syntheticmguh database. The purpose of this registry is to consolidate all of the vast Asthma data into a singular and accessible database, which supports exchange of patient information and advancements in research for further analysis. 
 
 Introduction: 
 Among other recommendations, NHLBI's guidelines (https://www.nhlbi.nih.gov/files/docs/guidelines/asthma_qrg.pdf) for the care of asthma patients suggest that all patients should: 
